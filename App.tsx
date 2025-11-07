@@ -5,7 +5,10 @@ import useSound from './hooks/useSound';
 import Header from './components/Header';
 import TaskInput from './components/TaskInput';
 import TaskList from './components/TaskList';
+import SettingsPanel from './components/SettingsPanel';
 import { breakdownTaskWithAI } from './services/geminiService';
+import { loadFromGist, saveToGist } from './services/githubSyncService';
+import { SettingsIcon } from './components/Icons';
 
 const sampleData: Task[] = [
     {
@@ -50,8 +53,44 @@ type DropPosition = 'top' | 'bottom' | 'child';
 const App: React.FC = () => {
     const [tasks, setTasks] = useLocalStorage<Task[]>('nested-tasks-v4-nordic', sampleData);
     const [draggedTask, setDraggedTask] = useState<Task | null>(null);
-    // FIX: Replaced invalid Base64 string with a valid one for a simple chime sound.
+    const [showSettings, setShowSettings] = useState(false);
     const playTimerSound = useSound('data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
+
+    // Auto-sync on mount if token exists
+    useEffect(() => {
+        const token = localStorage.getItem('github-token');
+        if (token) {
+            loadFromGist(token).then(result => {
+                if (result.success && result.data && result.data.length > 0) {
+                    const localLastSync = localStorage.getItem('last-sync-time');
+                    // Only auto-load if cloud data is newer
+                    if (!localLastSync || (result.lastSyncTime && result.lastSyncTime > localLastSync)) {
+                        setTasks(result.data);
+                        if (result.lastSyncTime) {
+                            localStorage.setItem('last-sync-time', result.lastSyncTime);
+                        }
+                    }
+                }
+            });
+        }
+    }, []);
+
+    // Auto-save to GitHub on task changes (debounced)
+    useEffect(() => {
+        const token = localStorage.getItem('github-token');
+        if (!token) return;
+
+        const timeoutId = setTimeout(() => {
+            const gistId = localStorage.getItem('github-gist-id');
+            saveToGist(token, tasks, gistId).then(result => {
+                if (result.success && result.lastSyncTime) {
+                    localStorage.setItem('last-sync-time', result.lastSyncTime);
+                }
+            });
+        }, 2000); // Wait 2 seconds after last change before syncing
+
+        return () => clearTimeout(timeoutId);
+    }, [tasks]);
 
     // --- Timer Logic ---
     useEffect(() => {
@@ -96,7 +135,6 @@ const App: React.FC = () => {
                 case 'pause': return { ...task, timerState: TimerState.Paused };
                 case 'reset': return { ...task, timerDuration: undefined, timerRemaining: undefined, timerState: TimerState.Idle };
                 case 'extend': 
-                    // FIX: Ensure timerDuration is not undefined before using it
                     if (task.timerDuration !== undefined) {
                         return { ...task, timerRemaining: task.timerDuration, timerState: TimerState.Running };
                     }
@@ -105,7 +143,6 @@ const App: React.FC = () => {
             }
         }));
     }, [setTasks]);
-
 
     // --- Core Task Logic ---
     const handleAddTask = useCallback((title: string, type: TaskType, parentId: string | null = null) => {
@@ -183,13 +220,11 @@ const App: React.FC = () => {
         e.preventDefault();
         if (!draggedTask || draggedTask.id === targetTask.id) return;
         
-        // 1. Remove the dragged task from its original position
         const removeTask = (tasks: Task[], id: string): Task[] => {
             return tasks.filter(t => t.id !== id).map(t => ({...t, children: removeTask(t.children, id)}));
         };
         const tasksWithoutDragged = removeTask(tasks, draggedTask.id);
 
-        // 2. Add it to the new position
         const addTask = (tasks: Task[], targetId: string, taskToAdd: Task, pos: DropPosition): Task[] => {
             if (pos === 'child') {
                  return tasks.map(t => {
@@ -242,7 +277,6 @@ const App: React.FC = () => {
         }
     };
     
-    // FIX: Add return statement with JSX to render the app UI.
     return (
         <div className="bg-slate-900 text-slate-100 min-h-screen font-sans p-4 sm:p-6 lg:p-8">
             <div className="max-w-4xl mx-auto">
@@ -252,6 +286,19 @@ const App: React.FC = () => {
                     onClearCompleted={handleClearCompleted}
                     onReset={handleReset}
                 />
+                
+                {/* Settings Button */}
+                <div className="flex justify-end mb-4">
+                    <button
+                        onClick={() => setShowSettings(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"
+                        aria-label="Open settings"
+                    >
+                        <SettingsIcon className="w-5 h-5" />
+                        GitHub Sync
+                    </button>
+                </div>
+
                 <main>
                     <TaskInput 
                         onAddTask={(title, type) => handleAddTask(title, type, null)} 
@@ -271,10 +318,18 @@ const App: React.FC = () => {
                         onDrop={handleDrop}
                     />
                 </main>
+
+                {/* Settings Panel */}
+                {showSettings && (
+                    <SettingsPanel
+                        tasks={tasks}
+                        onLoadTasks={setTasks}
+                        onClose={() => setShowSettings(false)}
+                    />
+                )}
             </div>
         </div>
     );
 };
 
-// FIX: Add default export for the App component.
 export default App;
