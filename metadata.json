@@ -1,0 +1,5 @@
+{
+  "name": "AI Nested Habit & Todo Tracker",
+  "description": "A sophisticated habit and todo tracker that allows for infinite nesting of tasks. Featuring AI-powered task breakdown to automatically generate subtasks from a high-level goal, and a sleek, modern interface for managing your productivity.",
+  "requestFramePermissions": []
+}
