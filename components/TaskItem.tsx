@@ -18,6 +18,8 @@ interface TaskHandlers {
   onDragStart: (e: React.DragEvent, task: Task) => void;
   onDragEnd: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent, targetTask: Task, position: DropPosition) => void;
+  onAddConnection: (sourceId: string, targetId: string) => void;
+  onDeleteConnection: (sourceId: string, targetId: string) => void;
 }
 
 interface TaskItemProps extends TaskHandlers {
@@ -25,6 +27,7 @@ interface TaskItemProps extends TaskHandlers {
   depth: number;
   viewMode: ViewMode;
   style?: React.CSSProperties; // For absolute positioning in mindmap
+  onStartDrawingConnection?: (task: Task, e: React.MouseEvent) => void;
 }
 
 const levelStyles = [
@@ -55,7 +58,7 @@ const computeProgress = (task: Task): { done: number; total: number } => {
 };
 
 const TaskItem: React.FC<TaskItemProps> = (props) => {
-    const { task, depth, viewMode, style, ...handlers } = props;
+    const { task, depth, viewMode, style, onStartDrawingConnection, ...handlers } = props;
     const [isEditing, setIsEditing] = useState(false);
     const [isAddingSubtask, setIsAddingSubtask] = useState(false);
     const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
@@ -99,7 +102,7 @@ const TaskItem: React.FC<TaskItemProps> = (props) => {
         <div style={style} className="absolute transition-all duration-500 ease-in-out group">
              <div
                 data-task-id={task.id}
-                className={`relative flex items-center gap-3 text-left p-3 pr-10 rounded-lg transition-all duration-200 border
+                className={`relative flex items-center gap-3 text-left p-3 pr-4 rounded-lg transition-all duration-200 border
                     w-64 min-h-[5rem] bg-slate-800/80
                     ${borderStyle} ${isCompleted ? 'opacity-50' : ''}
                 `}
@@ -109,10 +112,18 @@ const TaskItem: React.FC<TaskItemProps> = (props) => {
                     {isEditing ? editor : <p className={`font-medium ${textStyle} text-base ${isCompleted ? 'line-through text-slate-500' : ''}`}>{task.title}</p>}
                 </div>
                 
-                {(task.children.length > 0 || !task.collapsed) && (
+                <div 
+                    className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-crosshair z-30"
+                    onMouseDown={(e) => onStartDrawingConnection && onStartDrawingConnection(task, e)}
+                    title="Draw connection"
+                >
+                    <PlusCircleIcon className="w-5 h-5 text-slate-500 group-hover:text-sky-400 transition-colors" />
+                </div>
+
+                {(task.children.length > 0) && (
                     <button
                         onClick={() => handlers.onToggleCollapse(task.id)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center bg-slate-700/50 hover:bg-slate-600 rounded-full text-slate-300 transition-colors z-10"
+                        className="absolute right-2 -bottom-3 w-6 h-6 flex items-center justify-center bg-slate-700/50 hover:bg-slate-600 rounded-full text-slate-300 transition-colors z-10"
                         aria-label={task.collapsed ? "Expand subtasks" : "Collapse subtasks"}
                     >
                         {task.collapsed ? <ChevronRightIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
@@ -212,7 +223,7 @@ const TaskItem: React.FC<TaskItemProps> = (props) => {
             {!task.collapsed && task.children.length > 0 && (
                 <div>
                     {task.children.map(child => (
-                        <TaskItem key={child.id} task={child} depth={depth + 1} viewMode={viewMode} {...handlers} />
+                        <TaskItem key={child.id} task={child} depth={depth + 1} viewMode={viewMode} {...props} />
                     ))}
                 </div>
             )}

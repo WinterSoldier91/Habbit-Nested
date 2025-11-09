@@ -15,6 +15,8 @@ interface TaskHandlers {
   onDragStart: (e: React.DragEvent, task: Task) => void;
   onDragEnd: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent, targetTask: Task, position: DropPosition) => void;
+  onAddConnection: (sourceId: string, targetId: string) => void;
+  onDeleteConnection: (sourceId: string, targetId: string) => void;
 }
 
 interface TaskListProps extends TaskHandlers {
@@ -25,7 +27,7 @@ interface TaskListProps extends TaskHandlers {
 const NODE_WIDTH = 256; // w-64
 const NODE_HEIGHT = 80;  // min-h-[5rem] -> approx 80px
 const H_SPACING = 120;
-const V_SPACING = 30;
+const V_SPACING = 60; // Increased spacing for clarity
 
 type NodePosition = { task: Task; x: number; y: number; depth: number; };
 
@@ -97,6 +99,7 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
     const [transform, setTransform] = useState({ x: 50, y: 50, scale: 1 });
     const [isPanning, setIsPanning] = useState(false);
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+    const [drawingConnection, setDrawingConnection] = useState<{ sourceId: string, startX: number, startY: number, endX: number, endY: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const handleWheel = (e: React.WheelEvent) => {
@@ -124,46 +127,123 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
-        if (!isPanning) return;
-        const newX = e.clientX - panStart.x;
-        const newY = e.clientY - panStart.y;
-        setTransform(t => ({ ...t, x: newX, y: newY }));
+        if (isPanning) {
+            const newX = e.clientX - panStart.x;
+            const newY = e.clientY - panStart.y;
+            setTransform(t => ({ ...t, x: newX, y: newY }));
+        } else if (drawingConnection && containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const endX = (e.clientX - rect.left - transform.x) / transform.scale;
+            const endY = (e.clientY - rect.top - transform.y) / transform.scale;
+            setDrawingConnection(d => d ? { ...d, endX, endY } : null);
+        }
     };
 
     const handleMouseUp = (e: React.MouseEvent) => {
-        setIsPanning(false);
-        if (containerRef.current) {
-            containerRef.current.style.cursor = 'grab';
+        if (isPanning) {
+            setIsPanning(false);
+            if (containerRef.current) {
+                containerRef.current.style.cursor = 'grab';
+            }
+        }
+        if (drawingConnection) {
+            const targetEl = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-task-id]');
+            if (targetEl) {
+                const targetId = targetEl.getAttribute('data-task-id');
+                if (targetId && targetId !== drawingConnection.sourceId) {
+                    handlers.onAddConnection(drawingConnection.sourceId, targetId);
+                }
+            }
+            setDrawingConnection(null);
         }
     };
     
+    const handleStartDrawingConnection = (sourceTask: Task, e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!containerRef.current) return;
+        
+        const posMap = new Map(nodePositions.map(p => [p.task.id, p]));
+        const sourcePos = posMap.get(sourceTask.id);
+        if (!sourcePos) return;
+
+        const startX = sourcePos.x + NODE_WIDTH;
+        const startY = sourcePos.y + NODE_HEIGHT / 2;
+
+        const rect = containerRef.current.getBoundingClientRect();
+        const endX = (e.clientX - rect.left - transform.x) / transform.scale;
+        const endY = (e.clientY - rect.top - transform.y) / transform.scale;
+
+        setDrawingConnection({ sourceId: sourceTask.id, startX, startY, endX, endY });
+    };
+
     const connectorColors = ['stroke-slate-600', 'stroke-sky-600', 'stroke-teal-500', 'stroke-violet-500', 'stroke-rose-500'];
 
-    const connectors = useMemo(() => {
-        const lines: { d: string, className: string }[] = [];
+    const { hierarchicalConnectors, customConnectors } = useMemo(() => {
+        const hConnectors: { d: string, className: string }[] = [];
+        const cConnectors: { d: string, sourceId: string, targetId: string }[] = [];
         const posMap = new Map(nodePositions.map(p => [p.task.id, p]));
         
-        nodePositions.forEach(parentPos => {
-            if (!parentPos.task.collapsed && parentPos.task.children.length > 0) {
-                parentPos.task.children.forEach(child => {
+        nodePositions.forEach(sourcePos => {
+            // Hierarchical connections (Parent -> Child)
+            if (!sourcePos.task.collapsed && sourcePos.task.children.length > 0) {
+                sourcePos.task.children.forEach(child => {
                     const childPos = posMap.get(child.id);
                     if (childPos) {
-                        const startX = parentPos.x + NODE_WIDTH / 2;
-                        const startY = parentPos.y + NODE_HEIGHT;
-                        const endX = childPos.x + NODE_WIDTH / 2;
-                        const endY = childPos.y;
+                        const startX = sourcePos.x + NODE_WIDTH;
+                        const startY = sourcePos.y + NODE_HEIGHT / 2;
+                        const endX = childPos.x;
+                        const endY = childPos.y + NODE_HEIGHT / 2;
                         
-                        // Vertical S-curve
-                        const curveFactor = 50;
-                        const d = `M ${startX} ${startY} C ${startX} ${startY + curveFactor}, ${endX} ${endY - curveFactor}, ${endX} ${endY}`;
+                        // S-curve for a clean horizontal-to-horizontal connection
+                        const curveFactor = (endX - startX) * 0.4;
+                        const d = `M ${startX} ${startY} C ${startX + curveFactor} ${startY}, ${endX - curveFactor} ${endY}, ${endX} ${endY}`;
+
                         const className = connectorColors[childPos.depth % connectorColors.length];
-                        lines.push({ d, className });
+                        hConnectors.push({ d, className });
+                    }
+                });
+            }
+            // Custom connections (flowchart-style)
+            if (sourcePos.task.connections) {
+                sourcePos.task.connections.forEach(targetId => {
+                    const targetPos = posMap.get(targetId);
+                    if (targetPos) {
+                        const startX = sourcePos.x + NODE_WIDTH;
+                        const startY = sourcePos.y + NODE_HEIGHT / 2;
+                        const endX = targetPos.x;
+                        const endY = targetPos.y + NODE_HEIGHT / 2;
+
+                        let d: string;
+
+                        // When connecting from a deeper node to a shallower one (right-to-left "backwards" connection),
+                        // use a large, non-intersecting arc to maintain clarity.
+                        if (sourcePos.depth > targetPos.depth) {
+                            const midPointY = (startY + endY) / 2;
+                            const verticalGap = 100;
+                            
+                            // Route the arc above the main diagram if the connection is mostly in the top half,
+                            // otherwise route it below to avoid clutter.
+                            const detourY = midPointY < canvasHeight / 2 
+                                ? -verticalGap 
+                                : canvasHeight + verticalGap;
+                            
+                            // The horizontal extent of the curve's control points, scales with distance.
+                            const controlPointXOffset = Math.max(60, (startX - endX) * 0.2);
+
+                            d = `M ${startX} ${startY} C ${startX + controlPointXOffset} ${detourY}, ${endX - controlPointXOffset} ${detourY}, ${endX} ${endY}`;
+                        } else {
+                            // For forward or same-level connections, a standard S-curve is cleaner and more direct.
+                            const curveFactor = (endX - startX) * 0.4;
+                            d = `M ${startX} ${startY} C ${startX + curveFactor} ${startY}, ${endX - curveFactor} ${endY}, ${endX} ${endY}`;
+                        }
+                        cConnectors.push({ d, sourceId: sourcePos.task.id, targetId });
                     }
                 });
             }
         });
-        return lines;
-    }, [nodePositions]);
+        return { hierarchicalConnectors: hConnectors, customConnectors: cConnectors };
+    }, [nodePositions, canvasHeight]);
 
     return (
         <div 
@@ -186,10 +266,31 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
               }}
             >
                 <svg width={canvasWidth} height={canvasHeight} className="absolute top-0 left-0 pointer-events-none" style={{ overflow: 'visible' }}>
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
+                            <polygon points="0 0, 10 3.5, 0 7" className="fill-slate-500" />
+                        </marker>
+                         <marker id="arrowhead-hover" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
+                            <polygon points="0 0, 10 3.5, 0 7" className="fill-sky-400" />
+                        </marker>
+                    </defs>
                     <g>
-                    {connectors.map((connector, i) => (
-                        <path key={i} d={connector.d} className={`transition-all duration-500 stroke-2 fill-none ${connector.className}`} />
+                    {hierarchicalConnectors.map((connector, i) => (
+                        <path key={`h-${i}`} d={connector.d} className={`transition-all duration-500 stroke-2 fill-none ${connector.className}`} />
                     ))}
+                    {customConnectors.map(({ d, sourceId, targetId }) => (
+                         <g key={`c-${sourceId}-${targetId}`} className="group pointer-events-auto cursor-pointer" onClick={() => handlers.onDeleteConnection(sourceId, targetId)}>
+                            <path d={d} className="stroke-[10px] fill-none stroke-transparent" />
+                            <path d={d} className="stroke-2 fill-none stroke-slate-500 stroke-dasharray-4 group-hover:stroke-sky-400 transition-all" markerEnd="url(#arrowhead)" />
+                        </g>
+                    ))}
+                    {drawingConnection && (
+                        <path
+                            d={`M ${drawingConnection.startX} ${drawingConnection.startY} L ${drawingConnection.endX} ${drawingConnection.endY}`}
+                            className="stroke-2 fill-none stroke-sky-500"
+                            markerEnd="url(#arrowhead-hover)"
+                        />
+                    )}
                     </g>
                 </svg>
                 {nodePositions.map(({ task, x, y, depth }) => (
@@ -199,6 +300,7 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
                         depth={depth}
                         viewMode="mindmap"
                         style={{ top: `${y}px`, left: `${x}px` }}
+                        onStartDrawingConnection={handleStartDrawingConnection}
                         {...handlers}
                     />
                 ))}

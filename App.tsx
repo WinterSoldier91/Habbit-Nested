@@ -15,7 +15,7 @@ const sampleData: Task[] = [
       collapsed: false,
       children: [
         { id: "sample-2", title: 'Hydrate (500ml)', type: TaskType.Habit, completed: false, collapsed: false, children: [] },
-        { id: "sample-3", title: 'Meditation (10m)', type: TaskType.Habit, completed: false, collapsed: false, children: [] },
+        { id: "sample-3", title: 'Meditation (10m)', type: TaskType.Habit, completed: false, collapsed: false, children: [], connections: ["sample-6"] },
       ]
     },
     {
@@ -208,6 +208,24 @@ const App: React.FC = () => {
         setDraggedTask(null);
     }, [draggedTask, tasks, setTasks]);
 
+    // --- Connection Logic ---
+    const handleAddConnection = useCallback((sourceId: string, targetId: string) => {
+        setTasks(prev => mapTaskTree(prev, sourceId, task => {
+            const newConnections = [...(task.connections || [])];
+            if (!newConnections.includes(targetId)) {
+                newConnections.push(targetId);
+            }
+            return { ...task, connections: newConnections };
+        }));
+    }, [setTasks]);
+
+    const handleDeleteConnection = useCallback((sourceId: string, targetId: string) => {
+        setTasks(prev => mapTaskTree(prev, sourceId, task => ({
+            ...task,
+            connections: (task.connections || []).filter(id => id !== targetId),
+        })));
+    }, [setTasks]);
+
     // --- Global Actions ---
     const handleExpandAll = () => {
         const setCollapsed = (tasks: Task[], isCollapsed: boolean): Task[] => 
@@ -266,6 +284,8 @@ const App: React.FC = () => {
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
                         onDrop={handleDrop}
+                        onAddConnection={handleAddConnection}
+                        onDeleteConnection={handleDeleteConnection}
                     />
                 </main>
             </div>
