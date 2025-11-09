@@ -21,3 +21,5 @@ export interface Task {
   timerRemaining?: number; // in seconds
   timerState?: TimerState;
 }
+
+export type ViewMode = 'list' | 'mindmap';

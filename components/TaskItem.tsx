@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Task, TaskType, TimerState } from '../types';
-import { ChevronRightIcon, PlusIcon, PencilIcon, TrashIcon, TimerIcon, PlayIcon, PauseIcon, RotateCcwIcon, PlusCircleIcon, DragHandleIcon } from './Icons';
+// FIX: Import `useEffect` to be able to use the hook.
+import React, { useState, useRef, useEffect } from 'react';
+import { Task, TaskType, TimerState, ViewMode } from '../types';
+import { PlusIcon, PencilIcon, TrashIcon, TimerIcon, PlayIcon, PauseIcon, RotateCcwIcon, PlusCircleIcon, DragHandleIcon, ChevronRightIcon, ChevronDownIcon } from './Icons';
 import CircularProgress from './CircularProgress';
 import Checkbox from './Checkbox';
 
 type DropPosition = 'top' | 'bottom' | 'child';
 
-// Define all handler props in a single interface for clarity
 interface TaskHandlers {
   onToggleComplete: (id: string, completed: boolean) => void;
-  onToggleCollapse: (id: string) => void;
+  onToggleCollapse: (id:string) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string, title: string, type: TaskType) => void;
   onAddSubtask: (parentId: string, title: string, type: TaskType) => void;
@@ -23,8 +23,17 @@ interface TaskHandlers {
 interface TaskItemProps extends TaskHandlers {
   task: Task;
   depth: number;
+  viewMode: ViewMode;
+  style?: React.CSSProperties; // For absolute positioning in mindmap
 }
 
+const levelStyles = [
+    { border: 'border-slate-500', bg: 'bg-slate-500/5', text: 'text-slate-300' },
+    { border: 'border-sky-500', bg: 'bg-sky-500/5', text: 'text-sky-400' },
+    { border: 'border-teal-400', bg: 'bg-teal-400/5', text: 'text-teal-300' },
+    { border: 'border-violet-400', bg: 'bg-violet-400/5', text: 'text-violet-300' },
+    { border: 'border-rose-400', bg: 'bg-rose-400/5', text: 'text-rose-300' }
+];
 
 const computeProgress = (task: Task): { done: number; total: number } => {
   if (!task.children || task.children.length === 0) {
@@ -45,52 +54,93 @@ const computeProgress = (task: Task): { done: number; total: number } => {
   };
 };
 
-const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const secs = (seconds % 60).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
-};
+const TaskItem: React.FC<TaskItemProps> = (props) => {
+    const { task, depth, viewMode, style, ...handlers } = props;
+    const [isEditing, setIsEditing] = useState(false);
+    const [isAddingSubtask, setIsAddingSubtask] = useState(false);
+    const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
+    const itemRef = useRef<HTMLDivElement>(null);
 
+    const progress = task.children.length > 0 ? computeProgress(task) : null;
+    const isCompleted = progress ? progress.done === progress.total : task.completed;
+    
+    const styleIndex = depth % levelStyles.length;
+    const { border: borderStyle, bg: bgStyle, text: textStyle } = levelStyles[styleIndex];
 
-const TaskItem: React.FC<TaskItemProps> = ({ task, depth, ...handlers }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [isAddingSubtask, setIsAddingSubtask] = useState(false);
-  const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
-  const itemRef = useRef<HTMLDivElement>(null);
+    const handleToggleComplete = () => {
+        handlers.onToggleComplete(task.id, !isCompleted);
+    };
 
-  const progress = task.children.length > 0 ? computeProgress(task) : null;
-  const progressPercent = progress ? Math.round((progress.done / progress.total) * 100) : 0;
-  
-  const isCompleted = progress ? progress.done === progress.total : task.completed;
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        if (!itemRef.current || viewMode === 'mindmap') return;
+        const rect = itemRef.current.getBoundingClientRect();
+        const hoverY = e.clientY - rect.top;
+        const hoverThreshold = rect.height / 3;
 
-  const handleToggleComplete = () => {
-    handlers.onToggleComplete(task.id, !isCompleted);
-  };
-  
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (!itemRef.current) return;
-    const rect = itemRef.current.getBoundingClientRect();
-    const hoverY = e.clientY - rect.top;
-    const hoverThreshold = rect.height / 3;
+        if (hoverY < hoverThreshold) {
+            setDropPosition('top');
+        } else if (hoverY > rect.height - hoverThreshold) {
+            setDropPosition('bottom');
+        } else {
+            setDropPosition('child');
+        }
+    };
 
-    if (hoverY < hoverThreshold) {
-        setDropPosition('top');
-    } else if (hoverY > rect.height - hoverThreshold) {
-        setDropPosition('bottom');
-    } else {
-        setDropPosition('child');
-    }
-  };
+    const progressPercent = progress ? Math.round((progress.done / progress.total) * 100) : 0;
+    const timerProgress = (task.timerDuration && task.timerRemaining != null) 
+        ? 100 - (task.timerRemaining / task.timerDuration * 100) 
+        : 0;
+    
+    const editor = isEditing ? <Editor isSubtask={false} onSave={(title, type) => { handlers.onUpdate(task.id, title, type); setIsEditing(false); }} onCancel={() => setIsEditing(false)} task={task} /> : null;
+    const subtaskEditor = isAddingSubtask ? <Editor isSubtask={true} onSave={(title, type) => { handlers.onAddSubtask(task.id, title, type); setIsAddingSubtask(false); }} onCancel={() => setIsAddingSubtask(false)} task={task} /> : null;
 
-  const timerProgress = (task.timerDuration && task.timerRemaining != null) 
-    ? 100 - (task.timerRemaining / task.timerDuration * 100) 
-    : 0;
+    const renderMindmapNode = () => (
+        <div style={style} className="absolute transition-all duration-500 ease-in-out group">
+             <div
+                data-task-id={task.id}
+                className={`relative flex items-center gap-3 text-left p-3 pr-10 rounded-lg transition-all duration-200 border
+                    w-64 min-h-[5rem] bg-slate-800/80
+                    ${borderStyle} ${isCompleted ? 'opacity-50' : ''}
+                `}
+            >
+                <Checkbox checked={isCompleted} onChange={handleToggleComplete} />
+                <div className="flex-grow">
+                    {isEditing ? editor : <p className={`font-medium ${textStyle} text-base ${isCompleted ? 'line-through text-slate-500' : ''}`}>{task.title}</p>}
+                </div>
+                
+                {(task.children.length > 0 || !task.collapsed) && (
+                    <button
+                        onClick={() => handlers.onToggleCollapse(task.id)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center bg-slate-700/50 hover:bg-slate-600 rounded-full text-slate-300 transition-colors z-10"
+                        aria-label={task.collapsed ? "Expand subtasks" : "Collapse subtasks"}
+                    >
+                        {task.collapsed ? <ChevronRightIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+                    </button>
+                )}
+                
+                {/* Hover controls */}
+                {!isEditing && !isAddingSubtask && (
+                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 flex items-center justify-center gap-2 p-1.5 bg-slate-900/80 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-sm border border-slate-700 z-20">
+                        <TimerWidget task={task} onSetTimer={handlers.onSetTimer} onTimerControl={handlers.onTimerControl} progress={timerProgress} />
+                        <div className="w-px h-5 bg-slate-600"></div>
+                        <button onClick={() => setIsAddingSubtask(true)} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md"><PlusIcon className="w-5 h-5" /></button>
+                        <button onClick={() => setIsEditing(true)} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md"><PencilIcon className="w-5 h-5" /></button>
+                        <button onClick={() => handlers.onDelete(task.id)} className="p-1.5 text-red-400 hover:text-white hover:bg-red-500 rounded-md"><TrashIcon className="w-5 h-5" /></button>
+                    </div>
+                )}
 
-  return (
-    <div className="relative">
-        <div 
-            className="my-1.5 relative" 
+                {isAddingSubtask && (
+                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-20">
+                         {subtaskEditor}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const renderListItem = () => (
+         <div className='my-1.5 relative'
             style={{ marginLeft: `${depth * 1.5}rem`, maxWidth: `calc(100% - ${depth * 1.5}rem)` }}
             onDragOver={handleDragOver}
             onDragLeave={() => setDropPosition(null)}
@@ -99,44 +149,32 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, depth, ...handlers }) => {
                 setDropPosition(null);
             }}
         >
-            {dropPosition && (
-                <div className={`absolute left-0 right-0 h-1 bg-sky-500 rounded-full z-10 ${
-                    dropPosition === 'top' ? '-top-1' : 'bottom-0'
-                }`} />
-            )}
+            {dropPosition && <div className={`absolute left-0 right-0 h-1 bg-sky-500 rounded-full z-10 ${dropPosition === 'top' ? '-top-1' : 'bottom-0'}`} />}
             <div 
                 ref={itemRef}
-                className={`group flex items-start gap-2 p-3 rounded-lg transition-all duration-200 
-                    ${isCompleted ? 'bg-slate-800/60' : 'bg-slate-800 hover:bg-slate-700/80'}
-                    ${dropPosition === 'child' ? 'outline outline-2 outline-sky-500' : ''}`}
+                draggable={true}
+                onDragStart={(e) => handlers.onDragStart(e, task)}
+                onDragEnd={handlers.onDragEnd}
+                className={`group relative flex items-start gap-3 p-3 rounded-lg transition-all duration-200 border-l-4 ${borderStyle}
+                    ${isCompleted ? 'bg-slate-800/60' : `${bgStyle} hover:bg-slate-700/80`}
+                    ${dropPosition === 'child' ? 'outline outline-2 outline-sky-500' : 'border-slate-700/80'}`}
             >
-                <div className="flex items-center flex-shrink-0 mt-0.5">
-                    <div
-                        draggable="true"
-                        onDragStart={(e) => handlers.onDragStart(e, task)}
-                        onDragEnd={handlers.onDragEnd}
-                        className="text-slate-500 hover:text-slate-300 cursor-grab opacity-0 group-hover:opacity-100 transition-opacity"
-                        aria-label="Drag to reorder"
-                    >
-                        <DragHandleIcon className="w-5 h-5 -ml-1" />
-                    </div>
+                <div className="flex-shrink-0 flex items-center -ml-2 mt-0.5">
+                    <span className="cursor-grab opacity-0 group-hover:opacity-100 transition-opacity"><DragHandleIcon className="w-5 h-5 text-slate-500" /></span>
                     <button
                         onClick={() => handlers.onToggleCollapse(task.id)}
-                        className={`text-slate-500 hover:text-slate-300 ${task.children.length === 0 ? 'invisible' : ''}`}
+                        className={`text-slate-500 hover:text-slate-300 transform transition-transform
+                        ${task.children.length === 0 ? 'invisible' : ''}
+                        ${task.collapsed ? '' : 'rotate-90'}`}
                         aria-label={task.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
                     >
-                        <ChevronRightIcon className={`w-5 h-5 transition-transform ${task.collapsed ? '' : 'rotate-90'}`} />
+                        <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" /></svg>
                     </button>
                 </div>
-                
-                <Checkbox 
-                    checked={isCompleted}
-                    onChange={handleToggleComplete}
-                />
-                
+                <Checkbox checked={isCompleted} onChange={handleToggleComplete} />
                 <div className="flex-grow">
-                    <p className={`text-slate-200 ${isCompleted ? 'line-through text-slate-500' : ''}`}>{task.title}</p>
-                     <div className="flex items-center gap-3 mt-1.5">
+                    <p className={`${textStyle} ${isCompleted ? 'line-through text-slate-500' : ''}`}>{task.title}</p>
+                    <div className="flex items-center gap-3 mt-1.5">
                         <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded-full ${task.type === 'habit' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'}`}>
                             {task.type}
                         </span>
@@ -150,30 +188,42 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, depth, ...handlers }) => {
                         )}
                     </div>
                 </div>
-
                 <div className="flex-shrink-0 flex items-center gap-1">
                     <TimerWidget task={task} onSetTimer={handlers.onSetTimer} onTimerControl={handlers.onTimerControl} progress={timerProgress} />
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setIsAddingSubtask(true)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-600 rounded"><PlusIcon className="w-4 h-4" /></button>
-                      <button onClick={() => setIsEditing(true)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-600 rounded"><PencilIcon className="w-4 h-4" /></button>
-                      <button onClick={() => handlers.onDelete(task.id)} className="p-1 text-red-400 hover:text-white hover:bg-red-500 rounded"><TrashIcon className="w-4 h-4" /></button>
+                        <button onClick={() => setIsAddingSubtask(true)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-600 rounded"><PlusIcon className="w-4 h-4" /></button>
+                        <button onClick={() => setIsEditing(true)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-600 rounded"><PencilIcon className="w-4 h-4" /></button>
+                        <button onClick={() => handlers.onDelete(task.id)} className="p-1 text-red-400 hover:text-white hover:bg-red-500 rounded"><TrashIcon className="w-4 h-4" /></button>
                     </div>
                 </div>
             </div>
-            
-            {isEditing && <Editor isSubtask={false} onSave={(title, type) => handlers.onUpdate(task.id, title, type)} onCancel={() => setIsEditing(false)} task={task} />}
-            {isAddingSubtask && <Editor isSubtask={true} onSave={(title, type) => handlers.onAddSubtask(task.id, title, type)} onCancel={() => setIsAddingSubtask(false)} task={task} />}
+            {viewMode === 'list' && editor}
+            {viewMode === 'list' && subtaskEditor}
         </div>
-        
-        {!task.collapsed && task.children.length > 0 && (
-            <div className="border-l-2 border-slate-700/50">
-                {task.children.map(child => (
-                    <TaskItem key={child.id} task={child} depth={depth + 1} {...handlers} />
-                ))}
-            </div>
-        )}
-    </div>
-  );
+    );
+
+    if (viewMode === 'mindmap') {
+        return renderMindmapNode();
+    }
+
+    return (
+        <div className="relative">
+            {renderListItem()}
+            {!task.collapsed && task.children.length > 0 && (
+                <div>
+                    {task.children.map(child => (
+                        <TaskItem key={child.id} task={child} depth={depth + 1} viewMode={viewMode} {...handlers} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const secs = (seconds % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
 };
 
 const Editor: React.FC<{
@@ -188,14 +238,14 @@ const Editor: React.FC<{
 
     useEffect(() => { inputRef.current?.focus(); }, []);
     
-    const handleSave = () => { if (title.trim()) { onSave(title, type); onCancel(); }};
+    const handleSave = () => { if (title.trim()) { onSave(title, type); }};
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') handleSave();
         if (e.key === 'Escape') onCancel();
     };
     
     return (
-        <div className="mt-2 ml-14 flex items-center gap-2 p-2 bg-slate-900/50 rounded-md">
+        <div className="flex items-center gap-2 p-2 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-md relative z-20 w-80">
             <input 
                 ref={inputRef} value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={handleKeyDown}
                 className="flex-grow bg-slate-700 text-sm border border-slate-500 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-sky-500"
@@ -253,7 +303,7 @@ const TimerWidget: React.FC<{
     if (!hasTimer) {
         return (
             <div className="relative">
-                <button onClick={() => setPopoverOpen(!isPopoverOpen)} className="p-1 text-slate-400 hover:text-white hover:bg-slate-600 rounded">
+                <button onClick={() => setPopoverOpen(!isPopoverOpen)} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-md">
                     <TimerIcon className="w-5 h-5" />
                 </button>
                 {isPopoverOpen && (
