@@ -20,7 +20,6 @@ export interface Task {
   timerDuration?: number; // in seconds
   timerRemaining?: number; // in seconds
   timerState?: TimerState;
-  connections?: string[]; // Array of task IDs it connects to
 }
 
 export type ViewMode = 'list' | 'mindmap';

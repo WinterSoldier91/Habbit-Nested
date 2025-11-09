@@ -223,7 +223,14 @@ const TaskItem: React.FC<TaskItemProps> = (props) => {
             {!task.collapsed && task.children.length > 0 && (
                 <div>
                     {task.children.map(child => (
-                        <TaskItem key={child.id} task={child} depth={depth + 1} viewMode={viewMode} {...props} />
+                        <TaskItem
+                            key={child.id}
+                            task={child}
+                            depth={depth + 1}
+                            viewMode={viewMode}
+                            onStartDrawingConnection={onStartDrawingConnection}
+                            {...handlers}
+                        />
                     ))}
                 </div>
             )}

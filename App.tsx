@@ -15,7 +15,7 @@ const sampleData: Task[] = [
       collapsed: false,
       children: [
         { id: "sample-2", title: 'Hydrate (500ml)', type: TaskType.Habit, completed: false, collapsed: false, children: [] },
-        { id: "sample-3", title: 'Meditation (10m)', type: TaskType.Habit, completed: false, collapsed: false, children: [], connections: ["sample-6"] },
+        { id: "sample-3", title: 'Meditation (10m)', type: TaskType.Habit, completed: false, collapsed: false, children: [] },
       ]
     },
     {
@@ -30,6 +30,10 @@ const sampleData: Task[] = [
       ]
     }
 ];
+const sampleConnections: { [sourceId: string]: string[] } = {
+    "sample-3": ["sample-6"]
+};
+
 
 // Recursive helper to apply mutations to the task tree immutably
 const mapTaskTree = (tasks: Task[], id: string, mutation: (task: Task) => Task): Task[] => {
@@ -48,6 +52,7 @@ type DropPosition = 'top' | 'bottom' | 'child';
 
 const App: React.FC = () => {
     const [tasks, setTasks] = useLocalStorage<Task[]>('nested-tasks-v4-nordic', sampleData);
+    const [connections, setConnections] = useLocalStorage<{ [sourceId: string]: string[] }>('nested-tasks-connections-v1', sampleConnections);
     const [draggedTask, setDraggedTask] = useState<Task | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>('mindmap');
     // FIX: Replaced invalid Base64 string with a valid one for a simple chime sound.
@@ -153,15 +158,50 @@ const App: React.FC = () => {
     }, [setTasks]);
 
     const handleDelete = useCallback((id: string) => {
-       if (!confirm('Are you sure you want to delete this task and all its subtasks?')) return;
-        const filterTasks = (tasks: Task[]): Task[] => {
-           return tasks.filter(t => t.id !== id).map(t => ({
-               ...t,
-               children: filterTasks(t.children)
-           }));
+        if (!confirm('Are you sure you want to delete this task and all its subtasks?')) return;
+
+        const deletedIds = new Set<string>();
+
+        const findTaskInTree = (tasksToSearch: Task[], targetId: string): Task | null => {
+            for (const task of tasksToSearch) {
+                if (task.id === targetId) return task;
+                const foundInChildren = findTaskInTree(task.children, targetId);
+                if (foundInChildren) return foundInChildren;
+            }
+            return null;
         };
-        setTasks(filterTasks);
-    }, [setTasks]);
+
+        const taskToDelete = findTaskInTree(tasks, id);
+        if (!taskToDelete) return;
+
+        const collectIds = (task: Task) => {
+            deletedIds.add(task.id);
+            task.children.forEach(collectIds);
+        };
+        collectIds(taskToDelete);
+        
+        setTasks(currentTasks => {
+            const cleanTree = (tasks: Task[]): Task[] => {
+                return tasks
+                    .filter(task => !deletedIds.has(task.id))
+                    .map(task => ({ ...task, children: cleanTree(task.children) }));
+            };
+            return cleanTree(currentTasks);
+        });
+
+        setConnections(currentConnections => {
+            const newConnections: { [sourceId: string]: string[] } = {};
+            Object.entries(currentConnections).forEach(([sourceId, targetIds]) => {
+                if (deletedIds.has(sourceId)) return;
+                // FIX: Cast `targetIds` to `string[]` to resolve a TypeScript error where it was inferred as `unknown`.
+                const newTargets = (targetIds as string[]).filter(targetId => !deletedIds.has(targetId));
+                if (newTargets.length > 0) {
+                    newConnections[sourceId] = newTargets;
+                }
+            });
+            return newConnections;
+        });
+    }, [tasks, setTasks, setConnections]);
     
     // --- Drag and Drop Logic ---
     const handleDragStart = useCallback((e: React.DragEvent, task: Task) => {
@@ -210,21 +250,27 @@ const App: React.FC = () => {
 
     // --- Connection Logic ---
     const handleAddConnection = useCallback((sourceId: string, targetId: string) => {
-        setTasks(prev => mapTaskTree(prev, sourceId, task => {
-            const newConnections = [...(task.connections || [])];
-            if (!newConnections.includes(targetId)) {
-                newConnections.push(targetId);
+        setConnections(prev => {
+            const newTargets = [...(prev[sourceId] || [])];
+            if (!newTargets.includes(targetId)) {
+                newTargets.push(targetId);
             }
-            return { ...task, connections: newConnections };
-        }));
-    }, [setTasks]);
+            return { ...prev, [sourceId]: newTargets };
+        });
+    }, [setConnections]);
 
     const handleDeleteConnection = useCallback((sourceId: string, targetId: string) => {
-        setTasks(prev => mapTaskTree(prev, sourceId, task => ({
-            ...task,
-            connections: (task.connections || []).filter(id => id !== targetId),
-        })));
-    }, [setTasks]);
+        setConnections(prev => {
+            const newTargets = (prev[sourceId] || []).filter(id => id !== targetId);
+            const newConnections = { ...prev };
+            if (newTargets.length > 0) {
+                newConnections[sourceId] = newTargets;
+            } else {
+                delete newConnections[sourceId];
+            }
+            return newConnections;
+        });
+    }, [setConnections]);
 
     // --- Global Actions ---
     const handleExpandAll = () => {
@@ -252,6 +298,7 @@ const App: React.FC = () => {
     const handleReset = () => {
         if (confirm('Are you sure you want to reset all data to the sample data?')) {
             setTasks(sampleData);
+            setConnections(sampleConnections);
         }
     };
     
@@ -273,6 +320,7 @@ const App: React.FC = () => {
                     />
                     <TaskList 
                         tasks={tasks}
+                        connections={connections}
                         viewMode={viewMode}
                         onToggleComplete={handleToggleComplete}
                         onToggleCollapse={handleToggleCollapse}

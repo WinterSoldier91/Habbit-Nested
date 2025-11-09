@@ -1,6 +1,7 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { Task, TaskType, ViewMode } from '../types';
 import TaskItem from './TaskItem';
+import { RotateCcwIcon } from './Icons';
 
 type DropPosition = 'top' | 'bottom' | 'child';
 
@@ -21,6 +22,7 @@ interface TaskHandlers {
 
 interface TaskListProps extends TaskHandlers {
   tasks: Task[];
+  connections: { [sourceId: string]: string[] };
   viewMode: ViewMode;
 }
 
@@ -94,13 +96,50 @@ const useMindmapLayout = (tasks: Task[]): { positions: NodePosition[], width: nu
 };
 
 
-const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...handlers }) => {
+const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, connections, ...handlers }) => {
     const { positions: nodePositions, width: canvasWidth, height: canvasHeight } = useMindmapLayout(tasks);
     const [transform, setTransform] = useState({ x: 50, y: 50, scale: 1 });
     const [isPanning, setIsPanning] = useState(false);
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [drawingConnection, setDrawingConnection] = useState<{ sourceId: string, startX: number, startY: number, endX: number, endY: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const didInitialFit = useRef(false);
+
+    const handleFitToView = useCallback(() => {
+        if (!containerRef.current || canvasWidth === 0 || canvasHeight === 0) {
+            setTransform({ x: 50, y: 50, scale: 1 });
+            return;
+        }
+
+        const { width: viewWidth, height: viewHeight } = containerRef.current.getBoundingClientRect();
+        
+        // Add a margin so the content doesn't touch the edges
+        const marginFactor = 0.90; 
+        
+        const scaleX = viewWidth / canvasWidth;
+        const scaleY = viewHeight / canvasHeight;
+        
+        const scale = Math.min(scaleX, scaleY) * marginFactor;
+
+        // Center the content
+        const scaledWidth = canvasWidth * scale;
+        const scaledHeight = canvasHeight * scale;
+        const x = (viewWidth - scaledWidth) / 2;
+        const y = (viewHeight - scaledHeight) / 2;
+        
+        setTransform({ x, y, scale });
+    }, [canvasWidth, canvasHeight]);
+    
+    useEffect(() => {
+        // Fit the view the very first time the layout is calculated.
+        // Subsequent changes (like collapsing nodes) won't auto-refit,
+        // allowing the user to maintain their current zoom/pan.
+        // They can always click the button to re-fit.
+        if (!didInitialFit.current && canvasWidth > 0 && canvasHeight > 0) {
+            handleFitToView();
+            didInitialFit.current = true;
+        }
+    }, [canvasWidth, canvasHeight, handleFitToView]);
 
     const handleWheel = (e: React.WheelEvent) => {
         e.preventDefault();
@@ -204,18 +243,21 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
                     }
                 });
             }
-            // Custom connections (flowchart-style)
-            if (sourcePos.task.connections) {
-                sourcePos.task.connections.forEach(targetId => {
-                    const targetPos = posMap.get(targetId);
-                    if (targetPos) {
+        });
+        // Custom connections (flowchart-style) from the separate state
+        Object.entries(connections).forEach(([sourceId, targetIds]) => {
+            const sourcePos = posMap.get(sourceId);
+            if (sourcePos) {
+                // FIX: Cast `targetIds` to `string[]` to resolve a TypeScript error where it was inferred as `unknown`.
+                (targetIds as string[]).forEach(targetId => {
+                     const targetPos = posMap.get(targetId);
+                     if (targetPos) {
                         const startX = sourcePos.x + NODE_WIDTH;
                         const startY = sourcePos.y + NODE_HEIGHT / 2;
                         const endX = targetPos.x;
                         const endY = targetPos.y + NODE_HEIGHT / 2;
 
                         let d: string;
-
                         // When connecting from a deeper node to a shallower one (right-to-left "backwards" connection),
                         // use a large, non-intersecting arc to maintain clarity.
                         if (sourcePos.depth > targetPos.depth) {
@@ -239,11 +281,11 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
                         }
                         cConnectors.push({ d, sourceId: sourcePos.task.id, targetId });
                     }
-                });
+                })
             }
         });
         return { hierarchicalConnectors: hConnectors, customConnectors: cConnectors };
-    }, [nodePositions, canvasHeight]);
+    }, [nodePositions, connections, canvasHeight]);
 
     return (
         <div 
@@ -262,7 +304,7 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
                   height: canvasHeight,
                   transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
                   transformOrigin: '0 0',
-                  transition: isPanning ? 'none' : 'transform 0.2s'
+                  transition: isPanning ? 'none' : 'transform 0.2s ease-out'
               }}
             >
                 <svg width={canvasWidth} height={canvasHeight} className="absolute top-0 left-0 pointer-events-none" style={{ overflow: 'visible' }}>
@@ -305,12 +347,19 @@ const MindmapView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...hand
                     />
                 ))}
             </div>
+             <button
+                onClick={handleFitToView}
+                className="absolute top-4 right-4 z-10 p-2 bg-slate-700/50 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"
+                title="Fit to View"
+            >
+                <RotateCcwIcon className="w-5 h-5" />
+            </button>
         </div>
     );
 };
 
 
-const ListView: React.FC<Omit<TaskListProps, 'viewMode'>> = ({ tasks, ...handlers }) => (
+const ListView: React.FC<Omit<TaskListProps, 'viewMode' | 'connections'>> = ({ tasks, ...handlers }) => (
     <div>
       {tasks.map(task => (
         <TaskItem
